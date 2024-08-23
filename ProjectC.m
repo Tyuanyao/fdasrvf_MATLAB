@@ -15,10 +15,14 @@ function qnew = ProjectC(q)
 [n,T] = size(q);
 if(n == 2)
     dt = 0.35;
-end
-if(n == 3)
+elseif (n == 3)
     dt = 0.2;
+elseif (n == 6)
+    dt = 0.1;
+elseif (n == 9)
+    dt = 0.1;
 end
+
 epsilon = 1e-6;
 
 iter = 1;
