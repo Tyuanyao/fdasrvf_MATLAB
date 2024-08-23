@@ -60,6 +60,7 @@ classdef fdacurve
         beta            % (n,T,K) matrix defining n dimensional curve on T samples with K curves
         q               % (n,T,K) matrix defining n dimensional srvf on T samples with K srvfs
         betan           % aligned curves
+        betan_c         % aligned and scaled curves 
         qn              % aligned srvfs
         basis           % calculated basis
         beta_mean       % karcher mean curve
@@ -335,9 +336,9 @@ classdef fdacurve
                 
             end
 
-            % compute average length
+%             compute average length
             if obj.scale
-                % compute geometric mean
+%                 compute geometric mean
                 obj.mean_scale = (prod(obj.len))^(1/length(obj.len));
                 obj.mean_scale_q = (prod(obj.len_q))^(1/length(obj.len_q));
                 betamean = obj.mean_scale.*betamean; 
@@ -398,6 +399,168 @@ classdef fdacurve
             
         end
         
+
+        function obj = multiple_align(obj,cy,option)
+            % KARCHER_MEAN Calculate karcher mean of group of curves
+            % -------------------------------------------------------------
+            % This function aligns a collection of functions using the
+            % square-root velocity framework
+            %
+            % Usage:  obj.karcher_mean()
+            %         obj.karcher_mean(option)
+            %
+            % Input:
+            %            %
+            % default options
+            % option.reparam = true; % computes optimal reparamertization
+            % option.rotation = true; % computes optimal rotation
+            % option.lambda = 0.0;  % penalty
+            % option.parallel = 0; % turns on MATLAB parallel processing (need
+            % parallel processing toolbox)
+            % option.closepool = 0; % determines wether to close matlabpool
+            % option.MaxItr = 20;  % maximum iterations
+            % option.method = 'DP'; % reparam method
+            % controls which optimization method (default="DP") options are
+            % Dynamic Programming ("DP") and Riemannian BFGS
+            % ("RBFGSM")
+            %
+            % Output:
+            % fdacurve object
+            
+            if nargin < 2
+                option.reparam = true;
+                option.rotation = true;
+                option.lambda = 0.0;
+                option.parallel = 0;
+                option.closepool = 0;
+                option.MaxItr = 20;
+                option.method = 'DP';
+            end
+            
+            % time warping on a set of functions
+            if option.parallel == 1
+                if isempty(gcp('nocreate'))
+                    % prompt user for number threads to use
+                    nThreads = input('Enter number of threads to use: ');
+                    if nThreads > 1
+                        parpool(nThreads);
+                    elseif nThreads > 12 % check if the maximum allowable number of threads is exceeded
+                        while (nThreads > 12) % wait until user figures it out
+                            fprintf('Maximum number of threads allowed is 12\n Enter a number between 1 and 12\n');
+                            nThreads = input('Enter number of threads to use: ');
+                        end
+                        if nThreads > 1
+                            parpool(nThreads);
+                        end
+                    end
+                end
+            end
+            
+
+%             shape=2;
+            mu = obj.q(:,:,cy);
+%             mu=mu/sqrt(InnerProd_Q(mu,mu));
+%             betamean = obj.beta(:,:,cy);
+            T = size(mu,2);
+            n = size(mu,1);
+            K = size(obj.q,3);
+            gamma = zeros(T,K);
+
+            x=q_to_curve(mu);
+            if (obj.center)
+                a=-calculateCentroid(x);
+                betamean=x+repmat(a,1,T);
+            else
+                betamean = x;
+            end
+
+            % compute average length
+%             if obj.scale
+%                 % compute geometric mean
+%                 obj.mean_scale = (prod(obj.len))^(1/length(obj.len));
+%                 obj.mean_scale_q = (prod(obj.len_q))^(1/length(obj.len_q));
+%                 betamean = obj.mean_scale.*betamean; 
+%             end
+
+            % align to mean
+            betan1 = obj.beta;
+            qn1 = obj.q;
+            if option.parallel
+                parfor i=1:K
+                    q1 = obj.q(:,:,i);
+                    beta1 = betan1(:,:,i);
+                    
+                    % Compute shooting vector from mu to q_i
+                    [~,R,gamI] = Find_Rotation_and_Seed_unique(mu,q1, option.reparam, option.rotation,obj.closed,option.method);
+                    beta1 = R*beta1;
+                    beta1n = warp_curve_gamma(beta1,gamI);
+                    q1n = curve_to_q(beta1n);
+                    
+%                     % Find optimal rotation
+%                     [qn1(:,:,i),R] = Find_Best_Rotation(mu,q1n);
+%                     betan1(:,:,i) = R*beta1n;
+                end
+                obj.betan = betan1;
+                obj.qn = qn1;
+            else
+                obj.betan = obj.beta;
+                obj.qn = obj.q;
+                obj.betan_c = obj.beta;
+                for i=1:K
+                    q1=obj.q(:,:,i);
+                    beta1 = obj.beta(:,:,i);
+                    
+                    % Compute shooting vector from mu to q_i
+                    [~,R,gamI] = Find_Rotation_and_Seed_unique(mu,q1,option.reparam,...
+                                    option.rotation,obj.closed,option.lambda,option.method);
+%                     Find_Rotation_and_Seed_unique(q1,q2,reparamFlag,rotFlag,closed,lam,method)
+                    
+                    beta1 = R*beta1;
+                    beta1n = warp_curve_gamma(beta1,gamI);
+
+%                     plot3(beta1(1,:),beta1(2,:), beta1(3,:), 'LineWidth', 3, 'LineStyle', '-.', 'Color', 'black')
+%                     figure
+%                     plot3(beta1(1,:),beta1(2,:), beta1(3,:), '-.', ...
+%                                 'MarkerSize', 8, 'LineWidth', 2)
+
+                    obj.betan(:,:,i) = beta1n;
+                    gamma(:,i) = gamI;
+
+                    q1n = curve_to_q(beta1n);
+                    obj.qn(:,:,i) = q1n;
+                    obj.betan_c(:,:,i) = q_to_curve(q1n);
+%                     obj.beta1n(:,:,i) = beta1n;
+
+
+%                     plot((0:T-1)/(T-1), obj1.gams, 'linewidth', 1);
+%                     figure
+%                     plot((0:T-1)/(T-1), gamI, 'linewidth', 1);
+%                     obj.betan(:,:,i) = beta1n;
+
+
+                    % Find optimal rotation
+%                     [obj.qn(:,:,i),R] = Find_Best_Rotation(mu,q1n);
+%                     obj.betan(:,:,i) = R*beta1n;
+                end
+            end
+            
+            if option.parallel == 1 && option.closepool == 1
+                if isempty(gcp('nocreate'))
+                    delete(gcp('nocreate'))
+                end
+            end
+            
+            obj.beta_mean = betamean;
+            obj.q_mean = mu;
+            obj.gams = gamma;
+%             obj.lambda = options.lambda;
+%             obj.v = v1;
+%             obj.qun = sumd(1:iter);
+%             obj.E = normvbar(1:iter-1);
+            
+        end
+
+
         function obj = karcher_cov(obj)
             % KARCHER_COV Calculate karcher covariance
             % -------------------------------------------------------------
